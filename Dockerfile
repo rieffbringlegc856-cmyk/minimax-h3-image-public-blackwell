@@ -1,0 +1,58 @@
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
+
+WORKDIR /workspace
+
+# Системные пакеты
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libgl1-mesa-glx git curl dos2unix build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /workspace/ComfyUI
+
+WORKDIR /workspace/ComfyUI
+RUN pip install --no-cache-dir -r requirements.txt
+# ВАЖНО: не указываем здесь triton, чтобы использовать родной triton от PyTorch!
+RUN pip install --no-cache-dir runpod requests av boto3 pillow sageattention
+
+# Клонируем кастомные ноды
+WORKDIR /workspace/ComfyUI/custom_nodes
+RUN git clone https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder.git
+RUN git clone https://github.com/kijai/ComfyUI-SolAttn_triton.git
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git
+RUN git clone https://github.com/rgthree/rgthree-comfy.git
+RUN git clone https://github.com/yolain/ComfyUI-Easy-Use.git
+RUN git clone https://github.com/theUpsider/ComfyUI-Logic.git
+RUN git clone https://github.com/chflame163/ComfyUI_LayerStyle.git
+RUN git clone https://github.com/Smirnov75/ComfyUI-mxToolkit.git
+RUN git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git
+RUN git clone https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes.git
+RUN git clone https://github.com/StableLlama/ComfyUI-basic_data_handling.git
+RUN git clone https://github.com/lbouaraba/comfyui-krea2edit.git
+RUN git clone https://github.com/astropuzzo/ComfyUI-MiniMax-H3-Image-Studio.git
+RUN git clone https://github.com/Kvento/Comfyui_Minimax_h3_latent_Upscaler_ND.git
+RUN git clone https://github.com/mickmumpitz/ComfyUI-Mickmumpitz-Nodes.git
+
+# Установка зависимостей кастомных нод БЕЗ даунгрейда torch/transformers
+RUN for req in */requirements.txt; do [ -f "$req" ] && pip install --no-cache-dir --upgrade-strategy only-if-needed -r "$req" || true; done
+
+# Фиксируем совместимый стек PyTorch под CUDA 12.8 и Blackwell (sm_120) ПОСЛЕ всех нод
+RUN pip install --no-cache-dir --force-reinstall torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+
+# Патчер comfy_kitchen (после финальной установки PyTorch)
+COPY patch_kitchen.py /workspace/patch_kitchen.py
+RUN python3 /workspace/patch_kitchen.py
+
+# S3 загрузчик ссылок и сплиттер
+RUN mkdir -p /workspace/ComfyUI/custom_nodes/MiniMax_S3_Loader
+COPY minimax_s3_loader.py /workspace/ComfyUI/custom_nodes/MiniMax_S3_Loader/__init__.py
+
+# Переносим скрипты хэндлера, воркфлоу и старта
+WORKDIR /workspace/ComfyUI
+COPY image_api_ready.json /workspace/ComfyUI/image_api_ready.json
+COPY rp_handler.py /workspace/ComfyUI/rp_handler.py
+COPY start.sh /workspace/ComfyUI/start.sh
+
+RUN dos2unix /workspace/ComfyUI/start.sh && chmod +x /workspace/ComfyUI/start.sh
+
+CMD ["/workspace/ComfyUI/start.sh"]
